@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>독일 여행 주의 구역 지도</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; font-family: -apple-system, "Apple SD Gothic Neo", "Noto Sans KR", sans-serif; }
+  #map { position: absolute; inset: 0; }
+  .panel { position: absolute; z-index: 1000; left: 10px; top: 10px; background: #fff; border-radius: 12px;
+    box-shadow: 0 2px 12px rgba(0,0,0,.18); padding: 10px 12px; max-width: 260px; font-size: 13px; }
+  .panel h1 { font-size: 14px; margin: 0 0 6px; }
+  .cities { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; }
+  .cities button, .locate { border: 1px solid #ccc; background: #f7f7f7; border-radius: 8px; padding: 5px 8px; font-size: 12px; cursor: pointer; }
+  .cat { display: flex; align-items: center; gap: 6px; margin: 3px 0; }
+  .sw { width: 12px; height: 12px; border-radius: 3px; flex: none; }
+  .locate { position: absolute; z-index: 1000; right: 10px; bottom: 28px; padding: 12px 14px; font-size: 14px;
+    background: #1a73e8; color: #fff; border: none; box-shadow: 0 2px 10px rgba(0,0,0,.25); }
+  .locate.on { background: #0b8043; }
+  #alert { position: absolute; z-index: 1001; left: 10px; right: 10px; bottom: 80px; display: none;
+    background: #d93025; color: #fff; border-radius: 12px; padding: 12px 14px; font-size: 14px; box-shadow: 0 2px 12px rgba(0,0,0,.3); }
+  #alert b { display: block; margin-bottom: 4px; }
+  .toggle { font-size: 12px; color: #1a73e8; cursor: pointer; margin-top: 6px; display: inline-block; }
+  .popup h3 { margin: 0 0 4px; font-size: 14px; }
+  .popup p { margin: 4px 0; font-size: 12px; line-height: 1.45; }
+  .popup .tag { display: inline-block; font-size: 11px; padding: 1px 6px; border-radius: 6px; color: #fff; }
+  .popup a { font-size: 12px; margin-right: 8px; }
+</style>
+</head>
+<body>
+<div id="map"></div>
+
+<div class="panel" id="panel">
+  <h1>독일 주의 구역 (12/19–26)</h1>
+  <div class="cities">
+    <button data-c="50.1090,8.6700,15">프랑크푸르트</button>
+    <button data-c="49.4480,11.0800,15">뉘른베르크</button>
+    <button data-c="48.1405,11.5660,15">뮌헨</button>
+    <button data-c="52.5100,13.4100,13">베를린</button>
+  </div>
+  <div id="cats"></div>
+  <span class="toggle" id="fold">접기</span>
+</div>
+
+<button class="locate" id="locate">📍 내 위치 추적</button>
+<div id="alert"></div>
+
+<script>
+const CATS = {
+  ban:    { name: "공식 무기·칼 금지구역", color: "#d93025", desc: "시·주정부가 범죄 다발을 근거로 지정 (Waffen-/Messerverbotszone)" },
+  kbo:    { name: "경찰 지정 범죄다발지 (베를린 kbO)", color: "#e8710a", desc: "베를린 경찰이 공식 지정한 kriminalitätsbelastete Orte" },
+  scene:  { name: "마약·노숙 밀집 / 야간 주의", color: "#9334e6", desc: "시 문서·현지 보도·여행 후기 기반" },
+  pick:   { name: "소매치기 주의 (마켓·역)", color: "#1a73e8", desc: "크리스마스 마켓, 대형 역 — 강력범죄보다 절도 위주" }
+};
+
+// 좌표는 공식 지도·도로 목록을 보고 잡은 대략 범위. 정확한 경계는 각 출처 링크 확인.
+const ZONES = [
+  // ── Frankfurt ──
+  { cat: "ban", name: "프랑크푸르트 반호프스피어텔", type: "poly",
+    pts: [[50.1101,8.6648],[50.1122,8.6722],[50.1087,8.6737],[50.1052,8.6660],[50.1068,8.6642]],
+    note: "2023-11-01부터 무기금지구역. 유흥가와 공개 마약 거래 장소가 겹치는 곳(시장 발언). 중앙역 정문 나오면 바로 이 구역. 낮엔 식당·바 많고 사람 많음, 밤엔 타우누스·엘베·니다 거리 쪽 골목 피하기.",
+    src: "https://www.hessenschau.de/panorama/frankfurt-will-waffenverbotszone-ausweiten--auch-auf-den-weihnachtsmarkt-v2,bahnhofsviertel-waffenverbotszone-102.html" },
+  { cat: "scene", name: "타우누스·엘베·니다 거리 교차부", type: "circle", c: [50.1092,8.6676], r: 130,
+    note: "반호프스피어텔 안에서도 마약·홍등가가 몰린 골목. 한국 여행 블로그에서 '중앙역 앞 골목'으로 자주 언급되는 곳.",
+    src: "https://www.trvlogue.com/ko/kimpton-main-frankfurt-review" },
+  { cat: "pick", name: "프랑크푸르트 중앙역", type: "circle", c: [50.1069,8.6627], r: 180,
+    note: "2025년 1~5월 범죄 2,492건, 독일 역 중 2위. 대부분 절도.",
+    src: "https://newstime.joyn.de/themen/politik/auf-diesen-bahnhoefen-in-deutschland-ist-es-am-gefaehrlichsten-12876" },
+  { cat: "pick", name: "뢰머베르크 크리스마스 마켓", type: "circle", c: [50.1104,8.6821], r: 150,
+    note: "인파 밀집. 시가 크리스마스 마켓까지 무기금지구역으로 넣겠다고 발표(2024) — 현재 적용 여부는 현장 표지판 확인.",
+    src: "https://www.hessenschau.de/panorama/frankfurt-will-waffenverbotszone-ausweiten--auch-auf-den-weihnachtsmarkt-v2,bahnhofsviertel-waffenverbotszone-102.html" },
+
+  // ── Nürnberg ──
+  { cat: "ban", name: "뉘른베르크 중앙역 일대 (쾨니히스토어파사주 포함)", type: "poly",
+    pts: [[49.4484,11.0762],[49.4484,11.0848],[49.4440,11.0862],[49.4408,11.0842],[49.4408,11.0782],[49.4440,11.0772]],
+    note: "2025-04-24부터 무기·칼 금지구역. 역 북쪽·남쪽이 반복적으로 범죄 다발지라고 시가 명시. 범위: 역 지하 쾨니히스토어파사주, 북쪽 성벽 사이 프라우엔토어그라벤, 남쪽 칼-브뢰거 터널·첼티스 지하도·쥐트슈타트파크. 알코올·대마 금지구역도 겹침.",
+    src: "https://www.nuernberg.de/internet/stadtportal/waffenverbotszone.html" },
+  { cat: "scene", name: "쾨니히스토어파사주 (역 앞 지하상가)", type: "circle", c: [49.4471,11.0824], r: 90,
+    note: "주정부가 2016년 이후 치안 문제가 크게 늘었다고 한 곳. 바이에른 총리가 '반쯤 no-go 구역'이라고까지 함. 구시가지 갈 땐 지하 대신 지상 횡단보도로.",
+    src: "https://www.infranken.de/lk/nuernberg/ministerpraesident-soeder-nuernberg-hauptbahnhof-sicherheit-offensive-csu-bayern-bahnhof-bahnhofsgegend-art-6008145" },
+  { cat: "pick", name: "크리스트킨들레스마르크트 (하웁트마르크트)", type: "circle", c: [49.4539,11.0775], r: 130,
+    note: "독일 최대급 크리스마스 마켓. 소매치기가 단독·소그룹으로 활동한다고 경찰이 경고.",
+    src: "https://www.abendzeitung-muenchen.de/muenchen/festzeit-fuer-taschendiebe-art-181798" },
+
+  // ── München ──
+  { cat: "ban", name: "알터 보타니셔 가르텐 / 칼-슈튀첼 광장", type: "poly",
+    pts: [[48.1452,11.5622],[48.1452,11.5688],[48.1412,11.5690],[48.1412,11.5628]],
+    note: "2025-01-15부터 24시간 무기·칼 금지구역(2027-01까지). 중앙역 바로 동쪽 공원으로, 살인 사건 이후 지정. 중앙역→카를광장(슈타후스) 갈 때 공원 가로지르지 말고 큰길로.",
+    src: "https://stadt.muenchen.de/rathaus/stadtrecht/vorschrift/332/version1/0.html" },
+  { cat: "scene", name: "뮌헨 중앙역 남측 (실러·쉬첸 거리 일대)", type: "circle", c: [48.1388,11.5630], r: 170,
+    note: "시 문서에서 중앙역 주변 '방치 경향'과 함께 거론되는 구역. 밤 늦게 숙소 오갈 때 주의.",
+    src: "https://muenchen-transparent.de/dokumente/8515712/datei" },
+  { cat: "pick", name: "마리엔광장 크리스마스 마켓", type: "circle", c: [48.1374,11.5755], r: 140,
+    note: "현지 언론이 소매치기 단골 작업장으로 꼽는 곳.",
+    src: "https://www.abendzeitung-muenchen.de/muenchen/festzeit-fuer-taschendiebe-art-181798" },
+
+  // ── Berlin ──
+  { cat: "ban", name: "괴를리처 공원 (+ 라우지처 광장)", type: "poly",
+    pts: [[52.4998,13.4278],[52.5004,13.4380],[52.4960,13.4472],[52.4928,13.4455],[52.4950,13.4330],[52.4985,13.4275]],
+    note: "2025-02-15부터 무기·칼 금지구역이자 kbO. 마약 거래로 유명. 굳이 들어갈 이유 없음.",
+    src: "https://www.berlin.de/polizei/polizeimeldungen/fakten-hintergruende/artikel.1520041.php" },
+  { cat: "ban", name: "코트부서 토어 (Kotti)", type: "circle", c: [52.4992,13.4180], r: 230,
+    note: "무기·칼 금지구역 + kbO. 현지 상인 말로는 절도·마약 거래가 여전함.",
+    src: "https://www.berliner-zeitung.de/article/10019030" },
+  { cat: "ban", name: "레오폴트 광장 (베딩)", type: "circle", c: [52.5464,13.3591], r: 200,
+    note: "무기·칼 금지구역. 금지구역 3곳 중 압수된 칼이 가장 많았음(113개, 2026-05 기준).",
+    src: "https://pardok.parlament-berlin.de/starweb/adis/citat/VT/19/SchrAnfr/S19-26130.pdf" },
+  { cat: "kbo", name: "알렉산더 광장", type: "circle", c: [52.5219,13.4132], r: 320,
+    note: "경찰 지정 범죄다발지. 크리스마스 마켓도 여기서 열림 — 관광 동선이라 피할 수는 없고, 밤엔 오래 머물지 말기.",
+    src: "https://www.berlin.de/polizei/polizeimeldun-%20%20gen/fakten-hintergruende/artikel.1078268.php" },
+  { cat: "kbo", name: "바르샤우어 다리 / RAW 일대", type: "circle", c: [52.5057,13.4495], r: 300,
+    note: "클럽가. 마약 관련 범죄·소매치기가 주요 범죄 유형. 이스트사이드 갤러리 보고 밤에 이쪽으로 넘어갈 때 주의.",
+    src: "https://pardok.parlament-berlin.de/starweb/adis/citat/VT/19/SchrAnfr/S19-15313.pdf" },
+  { cat: "kbo", name: "헤르만 광장 / 도나우키츠", type: "circle", c: [52.4867,13.4247], r: 260,
+    note: "경찰 지정 범죄다발지.",
+    src: "https://pardok.parlament-berlin.de/starweb/adis/citat/VT/19/DruckSachen/d19-0444.pdf" },
+  { cat: "kbo", name: "헤르만 거리 / 노이쾰른역", type: "circle", c: [52.4693,13.4425], r: 300,
+    note: "경찰 지정 범죄다발지.",
+    src: "https://pardok.parlament-berlin.de/starweb/adis/citat/VT/19/DruckSachen/d19-0444.pdf" },
+  { cat: "pick", name: "브라이트샤이트 광장 크리스마스 마켓", type: "circle", c: [52.5050,13.3362], r: 130,
+    note: "인파 밀집. 경찰 경고에 따르면 소매치기는 2인조나 소그룹으로 다님(밀치기 수법 등).",
+    src: "https://www.berliner-kurier.de/panorama/klau-auf-dem-weihnachtsmarkt-das-sind-die-dreisten-tricks-der-taschendiebe-li.10006595" },
+  { cat: "pick", name: "잔다르멘마르크트 크리스마스 마켓", type: "circle", c: [52.5136,13.3926], r: 120,
+    note: "인파 밀집 — 가방은 앞으로 메기.",
+    src: "https://www.berliner-kurier.de/panorama/klau-auf-dem-weihnachtsmarkt-das-sind-die-dreisten-tricks-der-taschendiebe-li.10006595" }
+];
+
+const map = L.map("map", { zoomControl: false }).setView([50.1090, 8.6700], 15);
+L.control.zoom({ position: "topright" }).addTo(map);
+// 타일 서버 폴백 체인. file:// 로 열면 Referer가 없어서 OSM은 403, CARTO는 키 요구.
+// 첫 타일이 하나도 안 뜨고 에러만 쌓이면 다음 서버로 교체.
+const PROVIDERS = [
+  { url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}",
+    opt: { maxZoom: 19, attribution: "Tiles &copy; Esri" } },
+  { url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+    opt: { maxZoom: 19, attribution: "&copy; OpenStreetMap contributors" } }
+];
+let pIdx = 0, tiles = null;
+function useProvider(i) {
+  if (tiles) map.removeLayer(tiles);
+  const p = PROVIDERS[i];
+  let ok = false, errs = 0;
+  tiles = L.tileLayer(p.url, p.opt)
+    .on("tileload", () => { ok = true; })
+    .on("tileerror", () => {
+      if (ok) return;
+      if (++errs >= 4 && pIdx < PROVIDERS.length - 1) useProvider(++pIdx);
+    })
+    .addTo(map);
+  tiles.bringToBack();
+}
+useProvider(0);
+
+const groups = {};
+Object.keys(CATS).forEach(k => groups[k] = L.layerGroup().addTo(map));
+
+function popupHtml(z) {
+  const c = CATS[z.cat];
+  const center = z.type === "circle" ? z.c : z.pts[0];
+  const gmap = `https://www.google.com/maps/search/?api=1&query=${center[0]},${center[1]}`;
+  return `<div class="popup"><span class="tag" style="background:${c.color}">${c.name}</span>
+    <h3>${z.name}</h3><p>${z.note}</p>
+    <a href="${z.src}" target="_blank" rel="noopener">출처</a>
+    <a href="${gmap}" target="_blank" rel="noopener">구글맵에서 보기</a></div>`;
+}
+
+ZONES.forEach(z => {
+  const color = CATS[z.cat].color;
+  const style = { color, weight: 2, fillColor: color, fillOpacity: 0.22 };
+  const layer = z.type === "circle" ? L.circle(z.c, { ...style, radius: z.r }) : L.polygon(z.pts, style);
+  layer.bindPopup(popupHtml(z), { maxWidth: 280 });
+  layer.addTo(groups[z.cat]);
+  z.layer = layer;
+});
+
+// 범례 + 카테고리 토글
+const catsEl = document.getElementById("cats");
+Object.entries(CATS).forEach(([k, c]) => {
+  const row = document.createElement("label");
+  row.className = "cat";
+  row.title = c.desc;
+  row.innerHTML = `<input type="checkbox" checked><span class="sw" style="background:${c.color}"></span>${c.name}`;
+  row.querySelector("input").addEventListener("change", e => {
+    e.target.checked ? groups[k].addTo(map) : map.removeLayer(groups[k]);
+  });
+  catsEl.appendChild(row);
+});
+
+document.querySelectorAll(".cities button").forEach(b => b.addEventListener("click", () => {
+  const [lat, lng, z] = b.dataset.c.split(",").map(Number);
+  map.setView([lat, lng], z);
+}));
+
+const fold = document.getElementById("fold");
+fold.addEventListener("click", () => {
+  const hidden = catsEl.style.display === "none";
+  catsEl.style.display = hidden ? "" : "none";
+  document.querySelector(".cities").style.display = hidden ? "" : "none";
+  fold.textContent = hidden ? "접기" : "펼치기";
+});
+
+// ── 위치 추적 + 진입 경고 (페이지가 열려 있을 때만 동작) ──
+function inPolygon(pt, poly) {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const [yi, xi] = poly[i], [yj, xj] = poly[j];
+    if (((yi > pt[0]) !== (yj > pt[0])) && (pt[1] < (xj - xi) * (pt[0] - yi) / (yj - yi) + xi)) inside = !inside;
+  }
+  return inside;
+}
+function hits(pt) {
+  return ZONES.filter(z => z.type === "circle"
+    ? map.distance(pt, z.c) <= z.r
+    : inPolygon(pt, z.pts));
+}
+
+let watchId = null, me = null, acc = null, lastKey = "";
+const btn = document.getElementById("locate");
+const alertEl = document.getElementById("alert");
+
+btn.addEventListener("click", () => {
+  if (watchId !== null) {
+    navigator.geolocation.clearWatch(watchId); watchId = null;
+    btn.classList.remove("on"); btn.textContent = "📍 내 위치 추적";
+    alertEl.style.display = "none"; lastKey = "";
+    return;
+  }
+  if (!("geolocation" in navigator)) { showMsg("이 브라우저는 위치 기능을 지원하지 않아요."); return; }
+  btn.textContent = "위치 찾는 중…";
+  let first = true;
+  watchId = navigator.geolocation.watchPosition(pos => {
+    const pt = [pos.coords.latitude, pos.coords.longitude];
+    if (!me) {
+      me = L.circleMarker(pt, { radius: 8, color: "#fff", weight: 3, fillColor: "#1a73e8", fillOpacity: 1 }).addTo(map);
+      acc = L.circle(pt, { radius: pos.coords.accuracy, color: "#1a73e8", weight: 1, fillOpacity: 0.08 }).addTo(map);
+    } else { me.setLatLng(pt); acc.setLatLng(pt).setRadius(pos.coords.accuracy); }
+    if (first) { map.setView(pt, 16); first = false; }
+    btn.classList.add("on"); btn.textContent = "📍 추적 중 (끄기)";
+
+    const h = hits(pt);
+    const key = h.map(z => z.name).join("|");
+    if (h.length) {
+      alertEl.innerHTML = `<b>⚠️ 주의 구역 안이에요</b>${h.map(z => z.name).join(", ")}<br><span style="font-size:12px">가방 앞으로, 폰은 손에 쥐고 다니지 말기. 밤이면 큰길로 이동.</span>`;
+      alertEl.style.display = "block";
+      if (key !== lastKey && navigator.vibrate) navigator.vibrate([200, 100, 200]);
+    } else {
+      alertEl.style.display = "none";
+    }
+    lastKey = key;
+  }, err => {
+    watchId = null; btn.classList.remove("on"); btn.textContent = "📍 내 위치 추적";
+    showMsg(err.code === 1 ? "위치 권한이 거부됐어요. 브라우저 설정에서 허용해 주세요." : "위치를 가져오지 못했어요: " + err.message);
+  }, { enableHighAccuracy: true, maximumAge: 10000, timeout: 20000 });
+});
+
+function showMsg(t) {
+  alertEl.innerHTML = t; alertEl.style.display = "block";
+  setTimeout(() => { if (watchId === null) alertEl.style.display = "none"; }, 4000);
+}
+</script>
+</body>
+</html>
